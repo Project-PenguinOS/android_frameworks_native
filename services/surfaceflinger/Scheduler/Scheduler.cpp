@@ -184,13 +184,15 @@ void Scheduler::initializeIdleTimer(PhysicalDisplayId displayId) {
                                     kernelIdleTimerCallback(displayId, TimerState::Expired);
                                 }},
              .vrr = {.onReset =
-                             [this, displayId] {
-                                 mSchedulerCallback.vrrDisplayIdle(displayId, false);
-                             },
-                     .onExpired =
-                             [this, displayId] {
-                                 mSchedulerCallback.vrrDisplayIdle(displayId, true);
-                             }}});
+                              [this, displayId] {
+                                  applyPolicy(&Policy::idleTimers, TimerState::Reset, displayId);
+                                  mSchedulerCallback.vrrDisplayIdle(displayId, false);
+                              },
+                      .onExpired =
+                              [this, displayId] {
+                                  applyPolicy(&Policy::idleTimers, TimerState::Expired, displayId);
+                                  mSchedulerCallback.vrrDisplayIdle(displayId, true);
+                              }}});
 }
 
 bool Scheduler::designatePacesetterDisplay() {
@@ -1413,10 +1415,12 @@ void Scheduler::promotePacesetterDisplay(PromotionParams params,
                                     }},
                  .vrr = {.onReset =
                                  [this, pacesetterId] {
+                                     applyPolicy(&Policy::idleTimers, TimerState::Reset, *pacesetterId);
                                      mSchedulerCallback.vrrDisplayIdle(*pacesetterId, false);
                                  },
                          .onExpired =
                                  [this, pacesetterId] {
+                                     applyPolicy(&Policy::idleTimers, TimerState::Expired, *pacesetterId);
                                      mSchedulerCallback.vrrDisplayIdle(*pacesetterId, true);
                                  }}});
 
