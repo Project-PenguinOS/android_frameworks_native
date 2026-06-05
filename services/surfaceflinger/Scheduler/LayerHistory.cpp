@@ -394,6 +394,10 @@ void LayerHistory::partitionLayers(nsecs_t now) {
                     info->resetLayerVote();
                 }
 
+            if (it->second.first->getWindowType() == gui::WindowInfo::Type::STATUS_BAR) {
+                info->setLayerVote({LayerVoteType::NoVote, Fps()});
+            }
+
             it++;
         } else {
             if (CC_UNLIKELY(mTraceEnabled)) {
