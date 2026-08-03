@@ -183,6 +183,8 @@ protected:
                  nsecs_t appEarlyDuration, nsecs_t sfEarlyGpuDuration, nsecs_t appEarlyGpuDuration,
                  nsecs_t hwcMinWorkDuration);
 
+    virtual std::optional<nsecs_t> getDurationOverride(const char* basePropName, int fps) const;
+
 private:
 // QTI_BEGIN: 2023-01-17: Display: sf: Introduce QTI Extensions in AOSP
     friend class android::surfaceflingerextension::QtiWorkDurationsExtension;
