@@ -78,6 +78,9 @@ private:
 
     // Optional blend used for crossfade only if mMaxCrossFadeRadius > 0
     const sk_sp<SkRuntimeEffect> mMixEffect;
+
+    // PenguinOS Liquid Glass: rounded blur regions drawn as a lens with a lit rim
+    const sk_sp<SkRuntimeEffect> mLiquidGlassEffect;
 };
 
 } // namespace skia
