@@ -84,7 +84,7 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
         float2 src = xy - n * bend;
         // Frosted across the middle so what sits on the glass stays legible, clearer towards the
         // rim, where the bent picture of what's behind shows through.
-        float clear = clarity + (1.0 - clarity) * 0.6 * t;
+        float clear = clarity + (1.0 - clarity) * 0.55 * t * t;
         half3 rgb = mix(blurredInput.eval(src).rgb, originalInput.eval(src).rgb, half(clear));
 
         half l = dot(rgb, half3(0.2126, 0.7152, 0.0722));
@@ -194,7 +194,7 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
                         ? input->makeShader(SkTileMode::kMirror, SkTileMode::kMirror,
                                             linearSampling, inputMatrix)
                         : blurShader;
-        glass.uniform("clarity") = 0.18f;
+        glass.uniform("clarity") = 0.0f;
         glass.uniform("bounds") = SkV4{rect.fLeft, rect.fTop, rect.fRight, rect.fBottom};
         glass.uniform("radius") = radius;
         glass.uniform("band") = band;
