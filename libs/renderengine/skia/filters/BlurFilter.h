@@ -21,6 +21,8 @@
 #include <SkRuntimeEffect.h>
 #include <SkSurface.h>
 
+#include <string>
+
 #include "../compat/SkiaGpuContext.h"
 #include "RuntimeEffectManager.h"
 
@@ -66,6 +68,9 @@ public:
 
     float getMaxCrossFadeRadius() const;
 
+    // Picks Liquid Glass or plain blur for the display about to be drawn.
+    void setDisplay(const std::string& namePlusId);
+
     virtual void preallocateBuffers(SkiaGpuContext* context, ui::Size size) {}
     virtual bool areBuffersPreallocated(const SkiaGpuContext* context, ui::Size displaySize) const {
         return true;
@@ -81,6 +86,7 @@ private:
 
     // PenguinOS Liquid Glass: rounded blur regions drawn as a lens with a lit rim
     const sk_sp<SkRuntimeEffect> mLiquidGlassEffect;
+    bool mLiquidGlass = false;
 };
 
 } // namespace skia

@@ -914,6 +914,9 @@ void SkiaRenderEngine::drawLayersInternal(
     }
 
     validateOutputBufferUsage(buffer->getBuffer());
+    if (mBlurFilter) {
+        mBlurFilter->setDisplay(display.namePlusId);
+    }
 
     auto context = getActiveContext();
     LOG_ALWAYS_FATAL_IF(context->isAbandonedOrDeviceLost(),

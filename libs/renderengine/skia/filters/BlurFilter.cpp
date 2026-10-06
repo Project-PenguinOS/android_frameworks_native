@@ -62,6 +62,7 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
     uniform float band;
     uniform float refraction;
     uniform float rim;
+    uniform float saturation;
 
     float roundRect(float2 p, float2 c, float2 h, float r) {
         float2 q = abs(p - c) - (h - r);
@@ -88,7 +89,7 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
         half3 rgb = mix(blurredInput.eval(src).rgb, originalInput.eval(src).rgb, half(clear));
 
         half l = dot(rgb, half3(0.2126, 0.7152, 0.0722));
-        rgb = mix(half3(l), rgb, 1.25);
+        rgb = mix(half3(l), rgb, half(saturation));
         rgb = rgb * 1.04 + 0.02;
 
         float facing = dot(n, normalize(float2(-0.6, -1.0)));
@@ -100,32 +101,71 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
 )");
 
 static constexpr const char* kLiquidGlassProperty = "persist.sys.penguin.liquid_glass";
+// The names of the screens running a DeX desktop, separated by '|', which have Liquid Glass even
+// with the system switch off.
+static constexpr const char* kDexGlassProperty = "sys.penguin.liquid_glass.dex";
 
-// Whether Penguin Laboratory's Liquid Glass is on, re-read only when the property changes.
-static bool liquidGlassEnabled() {
-    static uint32_t areaSerial = UINT32_MAX;
-    static const prop_info* info = nullptr;
-    static uint32_t serial = UINT32_MAX;
-    static bool enabled = false;
-    if (info == nullptr) {
-        const uint32_t current = __system_property_area_serial();
-        if (current == areaSerial) return false;
-        areaSerial = current;
-        info = __system_property_find(kLiquidGlassProperty);
-        if (info == nullptr) return false;
+// A system property's value, re-read only when it changes.
+class CachedProperty {
+public:
+    explicit CachedProperty(const char* name) : mName(name) {}
+
+    const std::string& get() {
+        if (mInfo == nullptr) {
+            const uint32_t area = __system_property_area_serial();
+            if (area == mAreaSerial) return mValue;
+            mAreaSerial = area;
+            mInfo = __system_property_find(mName);
+            if (mInfo == nullptr) return mValue;
+        }
+        const uint32_t serial = __system_property_serial(mInfo);
+        if (serial != mSerial) {
+            mSerial = serial;
+            __system_property_read_callback(
+                    mInfo,
+                    [](void* cookie, const char*, const char* value, uint32_t) {
+                        *static_cast<std::string*>(cookie) = value;
+                    },
+                    &mValue);
+        }
+        return mValue;
     }
-    const uint32_t current = __system_property_serial(info);
-    if (current != serial) {
-        serial = current;
-        __system_property_read_callback(
-                info,
-                [](void* cookie, const char*, const char* value, uint32_t) {
-                    *static_cast<bool*>(cookie) =
-                            strcmp(value, "1") == 0 || strcmp(value, "true") == 0;
-                },
-                &enabled);
+
+private:
+    const char* mName;
+    const prop_info* mInfo = nullptr;
+    uint32_t mAreaSerial = UINT32_MAX;
+    uint32_t mSerial = UINT32_MAX;
+    std::string mValue;
+};
+
+// Whether Penguin Laboratory's Liquid Glass is on, or the display is one of DeX's desktops, where
+// it always is. namePlusId is "<display name> (<id>)", after "ScreenCapture, " for screenshots.
+static bool liquidGlassEnabledFor(const std::string& namePlusId) {
+    static CachedProperty global(kLiquidGlassProperty);
+    static CachedProperty dex(kDexGlassProperty);
+    const std::string& on = global.get();
+    if (on == "1" || on == "true") return true;
+    const std::string& names = dex.get();
+    size_t start = 0;
+    while (start < names.size()) {
+        size_t end = names.find('|', start);
+        if (end == std::string::npos) end = names.size();
+        if (end > start) {
+            // Compositing names the display alone; screenshots put "ScreenCapture, " first.
+            const std::string name = names.substr(start, end - start) + " (";
+            if (namePlusId.compare(0, name.size(), name) == 0 ||
+                namePlusId.find(", " + name) != std::string::npos) {
+                return true;
+            }
+        }
+        start = end + 1;
     }
-    return enabled;
+    return false;
+}
+
+void BlurFilter::setDisplay(const std::string& namePlusId) {
+    mLiquidGlass = mLiquidGlassEffect != nullptr && liquidGlassEnabledFor(namePlusId);
 }
 
 static SkMatrix getShaderTransform(const SkCanvas* canvas, const SkRect& blurRect,
@@ -177,12 +217,16 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
     const auto blurShader = blurredImage->makeShader(SkTileMode::kMirror, SkTileMode::kMirror,
                                                      linearSampling, &blurMatrix);
 
-    if (!effectRegion.isRect() && mLiquidGlassEffect != nullptr && liquidGlassEnabled()) {
+    // Liquid Glass: rounded regions become glass slabs; whole-window blurs, such as the shade's,
+    // keep the colours behind them vivid instead of greying them out, as iOS's materials do.
+    // Not while a blur is still fading in, which needs the crossfade below.
+    if (mLiquidGlass && (!effectRegion.isRect() || blurRadius >= mMaxCrossFadeRadius)) {
+        const bool slab = !effectRegion.isRect();
         const SkRect& rect = effectRegion.rect();
-        const float radius = effectRegion.radii(SkRRect::kUpperLeft_Corner).fX;
+        const float radius = slab ? effectRegion.radii(SkRRect::kUpperLeft_Corner).fX : 0.0f;
         const float shortSide = std::min(rect.width(), rect.height());
         // The curved rim is as deep as the corner, but never past the middle of the glass.
-        const float band = std::clamp(radius, 6.0f, shortSide * 0.5f);
+        const float band = slab ? std::clamp(radius, 6.0f, shortSide * 0.5f) : 1.0f;
         SkRuntimeShaderBuilder glass(mLiquidGlassEffect);
         glass.child("blurredInput") = blurShader;
         SkMatrix inputMatrix;
@@ -198,11 +242,20 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
         glass.uniform("bounds") = SkV4{rect.fLeft, rect.fTop, rect.fRight, rect.fBottom};
         glass.uniform("radius") = radius;
         glass.uniform("band") = band;
-        glass.uniform("refraction") = band * 0.7f;
-        glass.uniform("rim") = 0.32f;
+        glass.uniform("refraction") = slab ? band * 0.7f : 0.0f;
+        glass.uniform("rim") = slab ? 0.32f : 0.0f;
+        // A whole window's backdrop, such as the shade's, gets iOS's vivid blur.
+        glass.uniform("saturation") = slab ? 1.25f : 1.6f;
         paint.setShader(glass.makeShader());
-        paint.setAntiAlias(true);
-        canvas->drawRRect(effectRegion, paint);
+        if (slab) {
+            paint.setAntiAlias(true);
+            canvas->drawRRect(effectRegion, paint);
+        } else {
+            if (blurAlpha == 1.0f) {
+                paint.setBlendMode(SkBlendMode::kSrc);
+            }
+            canvas->drawRect(rect, paint);
+        }
         return;
     }
 
