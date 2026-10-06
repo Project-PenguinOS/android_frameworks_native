@@ -33,6 +33,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <memory>
+#include <mutex>
 
 #include "RuntimeEffectManager.h"
 
@@ -63,6 +66,10 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
     uniform float refraction;
     uniform float rim;
     uniform float saturation;
+    uniform float gain;
+    uniform float lift;
+    uniform float edgeClear;
+    uniform float curve;
 
     float roundRect(float2 p, float2 c, float2 h, float r) {
         float2 q = abs(p - c) - (h - r);
@@ -81,16 +88,19 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
 
         // 0 across the flat middle, 1 at the very edge.
         float t = clamp(1.0 + d / band, 0.0, 1.0);
-        float bend = refraction * t * t * t;
+        // The rim bends what's behind it as a lens would: along a ramp, or as a dome, steepest
+        // right at the edge where the glass curves away.
+        float dome = 1.0 - sqrt(max(1.0 - t * t, 0.0));
+        float bend = refraction * mix(t * t * t, dome, curve);
         float2 src = xy - n * bend;
         // Frosted across the middle so what sits on the glass stays legible, clearer towards the
         // rim, where the bent picture of what's behind shows through.
-        float clear = clarity + (1.0 - clarity) * 0.55 * t * t;
+        float clear = clarity + (1.0 - clarity) * edgeClear * t * t;
         half3 rgb = mix(blurredInput.eval(src).rgb, originalInput.eval(src).rgb, half(clear));
 
         half l = dot(rgb, half3(0.2126, 0.7152, 0.0722));
         rgb = mix(half3(l), rgb, half(saturation));
-        rgb = rgb * 1.04 + 0.02;
+        rgb = rgb * half(gain) + half(lift);
 
         float facing = dot(n, normalize(float2(-0.6, -1.0)));
         float edge = pow(t, 6.0);
@@ -164,6 +174,23 @@ static bool liquidGlassEnabledFor(const std::string& namePlusId) {
     return false;
 }
 
+// A Liquid Glass value overridden live from debug.lg.sf.<name>, for matching the material by eye.
+static float tune(const char* name, float fallback) {
+    static std::mutex lock;
+    static std::map<std::string, std::unique_ptr<CachedProperty>> props;
+    std::lock_guard<std::mutex> guard(lock);
+    auto& prop = props[name];
+    if (prop == nullptr) {
+        prop = std::make_unique<CachedProperty>(
+                strdup((std::string("debug.lg.sf.") + name).c_str()));
+    }
+    const std::string& value = prop->get();
+    if (value.empty()) return fallback;
+    char* end = nullptr;
+    const float parsed = strtof(value.c_str(), &end);
+    return end != value.c_str() ? parsed : fallback;
+}
+
 void BlurFilter::setDisplay(const std::string& namePlusId) {
     mLiquidGlass = mLiquidGlassEffect != nullptr && liquidGlassEnabledFor(namePlusId);
 }
@@ -226,7 +253,8 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
         const float radius = slab ? effectRegion.radii(SkRRect::kUpperLeft_Corner).fX : 0.0f;
         const float shortSide = std::min(rect.width(), rect.height());
         // The curved rim is as deep as the corner, but never past the middle of the glass.
-        const float band = slab ? std::clamp(radius, 6.0f, shortSide * 0.5f) : 1.0f;
+        const float band =
+                slab ? std::clamp(radius * tune("band", 0.6f), 6.0f, shortSide * 0.5f) : 1.0f;
         SkRuntimeShaderBuilder glass(mLiquidGlassEffect);
         glass.child("blurredInput") = blurShader;
         SkMatrix inputMatrix;
@@ -238,14 +266,18 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
                         ? input->makeShader(SkTileMode::kMirror, SkTileMode::kMirror,
                                             linearSampling, inputMatrix)
                         : blurShader;
-        glass.uniform("clarity") = 0.0f;
+        glass.uniform("clarity") = tune("clarity", 0.0f);
         glass.uniform("bounds") = SkV4{rect.fLeft, rect.fTop, rect.fRight, rect.fBottom};
         glass.uniform("radius") = radius;
         glass.uniform("band") = band;
-        glass.uniform("refraction") = slab ? band * 0.7f : 0.0f;
-        glass.uniform("rim") = slab ? 0.32f : 0.0f;
+        glass.uniform("refraction") = slab ? band * tune("refraction", 0.5f) : 0.0f;
+        glass.uniform("rim") = slab ? tune("rim", 0.0f) : 0.0f;
         // A whole window's backdrop, such as the shade's, gets iOS's vivid blur.
-        glass.uniform("saturation") = slab ? 1.25f : 1.6f;
+        glass.uniform("saturation") = slab ? tune("slab_sat", 1.1f) : tune("window_sat", 0.5f);
+        glass.uniform("gain") = slab ? tune("slab_gain", 0.9f) : tune("window_gain", 1.04f);
+        glass.uniform("lift") = slab ? tune("slab_lift", 0.0f) : tune("window_lift", 0.02f);
+        glass.uniform("edgeClear") = tune("edge_clear", 0.08f);
+        glass.uniform("curve") = tune("curve", 1.0f);
         paint.setShader(glass.makeShader());
         if (slab) {
             paint.setAntiAlias(true);
