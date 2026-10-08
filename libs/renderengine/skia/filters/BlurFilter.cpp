@@ -81,10 +81,13 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
         float2 h = (bounds.zw - bounds.xy) * 0.5;
         float r = min(radius, min(h.x, h.y));
         float d = roundRect(xy, c, h, r);
-        float e = 0.75;
-        float2 g = float2(roundRect(xy + float2(e, 0.0), c, h, r) - roundRect(xy - float2(e, 0.0), c, h, r),
-                          roundRect(xy + float2(0.0, e), c, h, r) - roundRect(xy - float2(0.0, e), c, h, r));
-        float2 n = g / max(length(g), 0.0001);
+        // The outward normal straight from the distance field's own terms, rather than by four
+        // more evaluations of it per pixel.
+        float2 rel = xy - c;
+        float2 q = abs(rel) - (h - r);
+        float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q)
+                 : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
+        n *= float2(rel.x < 0.0 ? -1.0 : 1.0, rel.y < 0.0 ? -1.0 : 1.0);
 
         // 0 across the flat middle, 1 at the very edge.
         float t = clamp(1.0 + d / band, 0.0, 1.0);
@@ -96,7 +99,11 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
         // Frosted across the middle so what sits on the glass stays legible, clearer towards the
         // rim, where the bent picture of what's behind shows through.
         float clear = clarity + (1.0 - clarity) * edgeClear * t * t;
-        half3 rgb = mix(blurredInput.eval(src).rgb, originalInput.eval(src).rgb, half(clear));
+        half3 rgb = blurredInput.eval(src).rgb;
+        // Most of a slab is its flat middle, where nothing of the sharp backdrop shows.
+        if (clear > 0.002) {
+            rgb = mix(rgb, originalInput.eval(src).rgb, half(clear));
+        }
 
         half l = dot(rgb, half3(0.2126, 0.7152, 0.0722));
         rgb = mix(half3(l), rgb, half(saturation));
