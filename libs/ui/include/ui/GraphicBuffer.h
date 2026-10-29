@@ -23,7 +23,18 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+// TARGET_USES_LEGACY_VENDOR_GRAPHICBUFFER: vendor blobs built against an older libui allocate
+// GraphicBuffer at the old size (256 bytes), so the vendor variant must not grow the object.
+#if defined(__ANDROID_VENDOR__) && defined(LIBUI_LEGACY_VENDOR_GRAPHICBUFFER)
+#define LIBUI_GRAPHICBUFFER_DEPENDENCY_MONITOR 0
+#else
+#define LIBUI_GRAPHICBUFFER_DEPENDENCY_MONITOR 1
+#endif
+
+#if LIBUI_GRAPHICBUFFER_DEPENDENCY_MONITOR
 #include "ui/DependencyMonitor.h"
+#endif
 
 #include <android/hardware_buffer.h>
 #include <ui/ANativeObjectBase.h>
@@ -240,7 +251,9 @@ public:
 
     void addDeathCallback(GraphicBufferDeathCallback deathCallback, void* context);
 
+#if LIBUI_GRAPHICBUFFER_DEPENDENCY_MONITOR
     DependencyMonitor& getDependencyMonitor() { return mDependencyMonitor; }
+#endif
 
 private:
     ~GraphicBuffer();
@@ -309,7 +322,9 @@ private:
     std::vector<std::pair<GraphicBufferDeathCallback, void* /*mDeathCallbackContext*/>>
             mDeathCallbacks;
 
+#if LIBUI_GRAPHICBUFFER_DEPENDENCY_MONITOR
     DependencyMonitor mDependencyMonitor;
+#endif
 };
 
 } // namespace android
