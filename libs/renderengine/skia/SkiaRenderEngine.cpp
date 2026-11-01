@@ -374,6 +374,7 @@ void SkiaRenderEngine::finishRenderingAndAbandonContexts() {
     // before ~SkiaGpuContext is called.
     mTextureCleanupMgr.setDeferredStatus(false);
     mTextureCleanupMgr.cleanup();
+    mCompositionLayerSurface.reset();
 
     // ~SkiaGpuContext must be called before GPU API contexts are torn down.
     mContext.reset();
@@ -1013,7 +1014,17 @@ void SkiaRenderEngine::drawLayersInternal(
                 }
             }
             if (requiresCompositionLayer) {
-                activeSurface = dstSurface->makeSurface(dstSurface->imageInfo());
+                // Kept across frames: Skia's cache drops it once full and a fade then allocates every frame
+                if (!mCompositionLayerSurface ||
+                    mCompositionLayerSurface->imageInfo() != dstSurface->imageInfo() ||
+                    mCompositionLayerSurface->recordingContext() !=
+                            dstSurface->recordingContext()) {
+                    mCompositionLayerSurface = dstSurface->makeSurface(dstSurface->imageInfo());
+                }
+                // Switching away from this layer below does not restore its canvas, so drop
+                // what the previous frame left on it.
+                mCompositionLayerSurface->getCanvas()->restoreToCount(1);
+                activeSurface = mCompositionLayerSurface;
                 canvas = mCapture->tryOffscreenCapture(activeSurface.get(), &offscreenCaptureState);
                 blurCompositionLayer = &layer;
                 break;
