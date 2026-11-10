@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <array>
+#include <unordered_map>
 #include <unordered_set>
+
+#include <android-base/parseint.h>
+#include <android-base/properties.h>
+#include <android-base/strings.h>
 
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/Display.h>
@@ -181,6 +187,25 @@ RenderIntent getHwcRenderIntent(const std::vector<RenderIntent>& hwcIntents, Ren
     return RenderIntent::COLORIMETRIC;
 }
 
+// Vendor SDR intents are only advertised under the SRGB mode, so wide-gamut content
+// otherwise falls back to COLORIMETRIC. Panels that ship a calibrated wide-gamut
+// partner for each vendor intent list the pairs as "from:to,..." in this property.
+const std::unordered_map<RenderIntent, RenderIntent>& getWcgRenderIntentMap() {
+    static const auto* map = [] {
+        auto* pairs = new std::unordered_map<RenderIntent, RenderIntent>();
+        const auto value = base::GetProperty("ro.surface_flinger.wcg_render_intent_map", "");
+        for (const auto& pair : base::Split(value, ",")) {
+            const auto ids = base::Split(pair, ":");
+            int32_t from, to;
+            if (ids.size() == 2 && base::ParseInt(ids[0], &from) && base::ParseInt(ids[1], &to)) {
+                (*pairs)[static_cast<RenderIntent>(from)] = static_cast<RenderIntent>(to);
+            }
+        }
+        return pairs;
+    }();
+    return *map;
+}
+
 } // anonymous namespace
 
 std::unique_ptr<compositionengine::DisplayColorProfile> createDisplayColorProfile(
@@ -311,7 +336,15 @@ void DisplayColorProfile::addColorMode(
     auto iter = hwcColorModes.find(hwcColorMode);
     const auto& hwcIntents =
             iter != hwcColorModes.end() ? iter->second : std::vector<RenderIntent>();
-    const RenderIntent hwcIntent = getHwcRenderIntent(hwcIntents, intent);
+    RenderIntent hwcIntent = getHwcRenderIntent(hwcIntents, intent);
+    if (hwcIntent != intent) {
+        const auto& wcgMap = getWcgRenderIntentMap();
+        const auto it = wcgMap.find(intent);
+        if (it != wcgMap.end() &&
+            std::find(hwcIntents.begin(), hwcIntents.end(), it->second) != hwcIntents.end()) {
+            hwcIntent = it->second;
+        }
+    }
 
     const Dataspace dataspace = colorModeToDataspace(mode);
     const Dataspace hwcDataspace = colorModeToDataspace(hwcColorMode);
